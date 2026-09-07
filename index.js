@@ -1,5 +1,8 @@
 require('dotenv').config();
 const keepAlive = require('./keepAlive');
+const cron = require('node-cron');
+const RSSParser = require('rss-parser');
+const rssParser = new RSSParser();
 const {
   Client,
   GatewayIntentBits,
@@ -20,6 +23,7 @@ const client = new Client({
 
 // ---- CONFIG ----
 const WELCOME_CHANNEL_NAME = process.env.WELCOME_CHANNEL_NAME || 'welcome';
+const NEWS_CHANNEL_NAME = process.env.NEWS_CHANNEL_NAME || 'news';
 const PREFIX = '!';
 
 const GREETINGS = [
@@ -43,6 +47,39 @@ function findWelcomeChannel(guild) {
   if (guild.systemChannel) return guild.systemChannel;
   return guild.channels.cache.find((c) => c.isTextBased());
 }
+
+function findNewsChannel(guild) {
+  const named = guild.channels.cache.find(
+    (c) => c.name === NEWS_CHANNEL_NAME && c.isTextBased()
+  );
+  if (named) return named;
+  return findWelcomeChannel(guild);
+}
+
+async function sendDailyNews() {
+  try {
+    const feed = await rssParser.parseURL('http://feeds.bbci.co.uk/news/world/rss.xml');
+    const topStories = feed.items.slice(0, 5);
+    const embed = new EmbedBuilder()
+      .setColor(0xff4500)
+      .setTitle('🗞️ Today\'s Top World News')
+      .setDescription(
+        topStories.map((item, i) => `**${i + 1}. [${item.title}](${item.link})**`).join('\n\n')
+      )
+      .setFooter({ text: 'Source: BBC News' })
+      .setTimestamp();
+
+    client.guilds.cache.forEach((guild) => {
+      const channel = findNewsChannel(guild);
+      if (channel) channel.send({ embeds: [embed] }).catch(console.error);
+    });
+  } catch (err) {
+    console.error('Failed to fetch/send daily news:', err);
+  }
+}
+
+// Runs every day at 5:00 AM India time
+cron.schedule('0 5 * * *', sendDailyNews, { timezone: 'Asia/Kolkata' });
 
 client.once('clientReady', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
@@ -255,6 +292,7 @@ client.on('messageCreate', async (message) => {
           '**Utility**',
           '`!ping` — health check',
           '`!welcomeall` — greet everyone (admin only)',
+          '`!news` — get today\'s top world news',
           '',
           '**Games**',
           '`!ttt @user` — start Tic Tac Toe, then `!move <1-9>`',
@@ -269,6 +307,27 @@ client.on('messageCreate', async (message) => {
         ].join('\n')
       );
     message.channel.send({ embeds: [embed] });
+    return;
+  }
+
+  if (command === 'news') {
+    message.reply('📰 Fetching today\'s top news...');
+    try {
+      const feed = await rssParser.parseURL('http://feeds.bbci.co.uk/news/world/rss.xml');
+      const topStories = feed.items.slice(0, 5);
+      const embed = new EmbedBuilder()
+        .setColor(0xff4500)
+        .setTitle('🗞️ Today\'s Top World News')
+        .setDescription(
+          topStories.map((item, i) => `**${i + 1}. [${item.title}](${item.link})**`).join('\n\n')
+        )
+        .setFooter({ text: 'Source: BBC News' })
+        .setTimestamp();
+      message.channel.send({ embeds: [embed] });
+    } catch (err) {
+      console.error(err);
+      message.reply('Could not fetch news right now, try again later.');
+    }
     return;
   }
 
