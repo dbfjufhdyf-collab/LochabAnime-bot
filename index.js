@@ -246,14 +246,53 @@ function hangmanDisplay(word, guessed) {
     .join(' ');
 }
 
+// ---- AI Chat (Google Gemini, free tier) ----
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+async function askGemini(userMessage) {
+  if (!GEMINI_API_KEY) return "AI chat isn't set up yet — ask the server owner to add a GEMINI_API_KEY.";
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  text: `You are LochabAnime, a friendly, casual Discord bot with an anime/shinobi vibe. Keep replies short (1-3 sentences), warm, and conversational. Respond to this message from a server member: "${userMessage}"`,
+                },
+              ],
+            },
+          ],
+        }),
+      }
+    );
+    const data = await res.json();
+    const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    return reply ? reply.trim() : "Hmm, I couldn't think of a reply to that!";
+  } catch (err) {
+    console.error('Gemini API error:', err);
+    return "Sorry, I'm having trouble thinking right now — try again in a bit!";
+  }
+}
+
 // Basic commands + "talk to everyone" behavior
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
   const channelId = message.channel.id;
 
-  // Reply if the bot is mentioned directly
+  // Reply if the bot is mentioned directly — real AI conversation
   if (message.mentions.has(client.user) && !message.content.startsWith(PREFIX)) {
-    message.reply(pickGreeting(`<@${message.author.id}>`)).catch(console.error);
+    const cleanMessage = message.content.replace(/<@!?\d+>/g, '').trim();
+    if (!cleanMessage) {
+      message.reply(pickGreeting(`<@${message.author.id}>`)).catch(console.error);
+      return;
+    }
+    await message.channel.sendTyping().catch(() => {});
+    const aiReply = await askGemini(cleanMessage);
+    message.reply(aiReply).catch(console.error);
     return;
   }
 
