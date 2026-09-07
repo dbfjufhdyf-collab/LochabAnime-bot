@@ -18,6 +18,7 @@ const client = new Client({
   partials: [Partials.GuildMember, Partials.Channel],
 });
 
+// ---- CONFIG ----
 const WELCOME_CHANNEL_NAME = process.env.WELCOME_CHANNEL_NAME || 'welcome';
 const PREFIX = '!';
 
@@ -61,11 +62,15 @@ client.on('guildMemberAdd', async (member) => {
   channel.send({ embeds: [embed] }).catch(console.error);
 });
 
-const tttGames = new Map();
-const numberGames = new Map();
-const wordGames = new Map();
-const hangmanGames = new Map();
+// =========================================================
+// GAME STATE (stored per-channel, resets if the bot restarts)
+// =========================================================
+const tttGames = new Map();      // channelId -> {board, players:[p1id,p2id], turn}
+const numberGames = new Map();   // channelId -> {number, min, max, attempts}
+const wordGames = new Map();     // channelId -> {type:'trivia'|'scramble', answer, display}
+const hangmanGames = new Map();  // channelId -> {word, guessed:Set, wrong, maxWrong}
 
+// ---- Tic Tac Toe ----
 const TTT_EMOJI = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
 function renderBoard(board) {
   const cells = board.map((v, i) => (v === null ? TTT_EMOJI[i] : v === 'X' ? '❌' : '⭕'));
@@ -84,6 +89,7 @@ function checkWinner(board) {
   return null;
 }
 
+// ---- Trivia questions (original, general knowledge) ----
 const TRIVIA_QUESTIONS = [
   { q: 'What is the largest planet in our solar system?', a: 'jupiter' },
   { q: 'How many continents are there on Earth?', a: '7' },
@@ -97,6 +103,7 @@ const TRIVIA_QUESTIONS = [
   { q: 'Which country is known as the Land of the Rising Sun?', a: 'japan' },
 ];
 
+// ---- Word scramble list ----
 const SCRAMBLE_WORDS = ['ninja', 'sensei', 'dragon', 'shadow', 'thunder', 'phoenix', 'samurai', 'kunai'];
 function scrambleWord(word) {
   const arr = word.split('');
@@ -108,6 +115,83 @@ function scrambleWord(word) {
   return scrambled === word ? scrambleWord(word) : scrambled;
 }
 
+// ---- Flag guessing (every country) ----
+function codeToFlagEmoji(code) {
+  return code
+    .toUpperCase()
+    .replace(/./g, (char) => String.fromCodePoint(127397 + char.charCodeAt(0)));
+}
+const COUNTRY_CODES = [
+  ['AF', 'afghanistan'], ['AL', 'albania'], ['DZ', 'algeria'], ['AD', 'andorra'], ['AO', 'angola'],
+  ['AG', 'antigua and barbuda'], ['AR', 'argentina'], ['AM', 'armenia'], ['AU', 'australia'], ['AT', 'austria'],
+  ['AZ', 'azerbaijan'], ['BS', 'bahamas'], ['BH', 'bahrain'], ['BD', 'bangladesh'], ['BB', 'barbados'],
+  ['BY', 'belarus'], ['BE', 'belgium'], ['BZ', 'belize'], ['BJ', 'benin'], ['BT', 'bhutan'],
+  ['BO', 'bolivia'], ['BA', 'bosnia and herzegovina'], ['BW', 'botswana'], ['BR', 'brazil'], ['BN', 'brunei'],
+  ['BG', 'bulgaria'], ['BF', 'burkina faso'], ['BI', 'burundi'], ['CV', 'cabo verde'], ['KH', 'cambodia'],
+  ['CM', 'cameroon'], ['CA', 'canada'], ['CF', 'central african republic'], ['TD', 'chad'], ['CL', 'chile'],
+  ['CN', 'china'], ['CO', 'colombia'], ['KM', 'comoros'], ['CG', 'congo'], ['CR', 'costa rica'],
+  ['HR', 'croatia'], ['CU', 'cuba'], ['CY', 'cyprus'], ['CZ', 'czechia'], ['DK', 'denmark'],
+  ['DJ', 'djibouti'], ['DM', 'dominica'], ['DO', 'dominican republic'], ['EC', 'ecuador'], ['EG', 'egypt'],
+  ['SV', 'el salvador'], ['GQ', 'equatorial guinea'], ['ER', 'eritrea'], ['EE', 'estonia'], ['SZ', 'eswatini'],
+  ['ET', 'ethiopia'], ['FJ', 'fiji'], ['FI', 'finland'], ['FR', 'france'], ['GA', 'gabon'],
+  ['GM', 'gambia'], ['GE', 'georgia'], ['DE', 'germany'], ['GH', 'ghana'], ['GR', 'greece'],
+  ['GD', 'grenada'], ['GT', 'guatemala'], ['GN', 'guinea'], ['GW', 'guinea-bissau'], ['GY', 'guyana'],
+  ['HT', 'haiti'], ['HN', 'honduras'], ['HU', 'hungary'], ['IS', 'iceland'], ['IN', 'india'],
+  ['ID', 'indonesia'], ['IR', 'iran'], ['IQ', 'iraq'], ['IE', 'ireland'], ['IL', 'israel'],
+  ['IT', 'italy'], ['JM', 'jamaica'], ['JP', 'japan'], ['JO', 'jordan'], ['KZ', 'kazakhstan'],
+  ['KE', 'kenya'], ['KI', 'kiribati'], ['KW', 'kuwait'], ['KG', 'kyrgyzstan'], ['LA', 'laos'],
+  ['LV', 'latvia'], ['LB', 'lebanon'], ['LS', 'lesotho'], ['LR', 'liberia'], ['LY', 'libya'],
+  ['LI', 'liechtenstein'], ['LT', 'lithuania'], ['LU', 'luxembourg'], ['MG', 'madagascar'], ['MW', 'malawi'],
+  ['MY', 'malaysia'], ['MV', 'maldives'], ['ML', 'mali'], ['MT', 'malta'], ['MH', 'marshall islands'],
+  ['MR', 'mauritania'], ['MU', 'mauritius'], ['MX', 'mexico'], ['FM', 'micronesia'], ['MD', 'moldova'],
+  ['MC', 'monaco'], ['MN', 'mongolia'], ['ME', 'montenegro'], ['MA', 'morocco'], ['MZ', 'mozambique'],
+  ['MM', 'myanmar'], ['NA', 'namibia'], ['NR', 'nauru'], ['NP', 'nepal'], ['NL', 'netherlands'],
+  ['NZ', 'new zealand'], ['NI', 'nicaragua'], ['NE', 'niger'], ['NG', 'nigeria'], ['KP', 'north korea'],
+  ['MK', 'north macedonia'], ['NO', 'norway'], ['OM', 'oman'], ['PK', 'pakistan'], ['PW', 'palau'],
+  ['PA', 'panama'], ['PG', 'papua new guinea'], ['PY', 'paraguay'], ['PE', 'peru'], ['PH', 'philippines'],
+  ['PL', 'poland'], ['PT', 'portugal'], ['QA', 'qatar'], ['RO', 'romania'], ['RU', 'russia'],
+  ['RW', 'rwanda'], ['KN', 'saint kitts and nevis'], ['LC', 'saint lucia'], ['VC', 'saint vincent and the grenadines'],
+  ['WS', 'samoa'], ['SM', 'san marino'], ['ST', 'sao tome and principe'], ['SA', 'saudi arabia'], ['SN', 'senegal'],
+  ['RS', 'serbia'], ['SC', 'seychelles'], ['SL', 'sierra leone'], ['SG', 'singapore'], ['SK', 'slovakia'],
+  ['SI', 'slovenia'], ['SB', 'solomon islands'], ['SO', 'somalia'], ['ZA', 'south africa'], ['KR', 'south korea'],
+  ['SS', 'south sudan'], ['ES', 'spain'], ['LK', 'sri lanka'], ['SD', 'sudan'], ['SR', 'suriname'],
+  ['SE', 'sweden'], ['CH', 'switzerland'], ['SY', 'syria'], ['TW', 'taiwan'], ['TJ', 'tajikistan'],
+  ['TZ', 'tanzania'], ['TH', 'thailand'], ['TL', 'timor-leste'], ['TG', 'togo'], ['TO', 'tonga'],
+  ['TT', 'trinidad and tobago'], ['TN', 'tunisia'], ['TR', 'turkey'], ['TM', 'turkmenistan'], ['TV', 'tuvalu'],
+  ['UG', 'uganda'], ['UA', 'ukraine'], ['AE', 'united arab emirates'], ['GB', 'united kingdom'], ['US', 'usa'],
+  ['UY', 'uruguay'], ['UZ', 'uzbekistan'], ['VU', 'vanuatu'], ['VA', 'vatican city'], ['VE', 'venezuela'],
+  ['VN', 'vietnam'], ['YE', 'yemen'], ['ZM', 'zambia'], ['ZW', 'zimbabwe'],
+];
+const FLAGS = COUNTRY_CODES.map(([code, name]) => ({ emoji: codeToFlagEmoji(code), name }));
+
+// ---- Naruto character clue guessing (original text clues, no images) ----
+const NARUTO_CLUES = [
+  { clue: 'This ninja carries the Nine-Tails inside him and dreams of becoming Hokage.', a: 'naruto' },
+  { clue: 'The last surviving Uchiha for most of the story, obsessed with avenging his clan.', a: 'sasuke' },
+  { clue: 'A pink-haired medical ninja and one of the strongest kunoichi of her generation.', a: 'sakura' },
+  { clue: 'This masked jonin is famous for always being late and reading orange books.', a: 'kakashi' },
+  { clue: 'Wears an orange spiral mask for most of the series and manipulates events from the shadows.', a: 'obito' },
+  { clue: 'A Hyuga clan member with the Byakugan, known for gentle fist taijutsu.', a: 'hinata' },
+  { clue: 'This shinobi controls shadows and is famous for saying things are "troublesome."', a: 'shikamaru' },
+  { clue: 'The Fourth Hokage, known for the Flying Thunder God technique.', a: 'minato' },
+  { clue: 'A member of the Akatsuki who uses clay explosives and loves art that "is a bang".', a: 'deidara' },
+  { clue: 'The leader of the Sand Village who once had a tailed beast sealed inside him.', a: 'gaara' },
+];
+
+// ---- Countryball Animator guessing (text clues, real public YouTubers) ----
+const YOUTUBER_CLUES = [
+  { clue: 'This animator hosts the "CountryVerse" collab series and is known for high-quality countryball animations.', a: 'mrspherical' },
+  { clue: 'A New Zealand-based 3D countryball animator, famous for comparing countries by size using real data.', a: 'pwa' },
+  { clue: 'Widely seen as the most influential Polandball YouTuber, known for very high-quality art and animation.', a: 'kaliningrad general' },
+  { clue: 'An Indian animator known for geography and history meme videos featuring countryballs.', a: 'ace animations' },
+  { clue: 'A British countryball YouTuber known for history explainer videos, and a former moderator of r/polandball.', a: 'brain4breakfast' },
+  { clue: 'A Macau-based creator who translates countryball animations from Chinese platforms into English.', a: 'huaxiaccball' },
+  { clue: 'A Filipino-run channel best known for its long-running animated series "CountryballsAnimated."', a: 'philippinesball animations' },
+  { clue: 'A large countryballs channel with a name that literally means cheerful countryballs.', a: 'happy countryballs' },
+  { clue: 'This channel mixes countryball cameos into anime-style animation and humor.', a: 'animeballs' },
+];
+
+// ---- Hangman ----
 const HANGMAN_WORDS = ['naruto', 'obito', 'sharingan', 'akatsuki', 'chidori', 'rasengan', 'kunoichi', 'jutsu'];
 const HANGMAN_STAGES = [
   '```\n  +---+\n      |\n      |\n      |\n     ===```',
@@ -125,10 +209,12 @@ function hangmanDisplay(word, guessed) {
     .join(' ');
 }
 
+// Basic commands + "talk to everyone" behavior
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
   const channelId = message.channel.id;
 
+  // Reply if the bot is mentioned directly
   if (message.mentions.has(client.user) && !message.content.startsWith(PREFIX)) {
     message.reply(pickGreeting(`<@${message.author.id}>`)).catch(console.error);
     return;
@@ -138,6 +224,7 @@ client.on('messageCreate', async (message) => {
   const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
   const command = args.shift().toLowerCase();
 
+  // ---------------- WELCOME / UTILITY ----------------
   if (command === 'welcomeall') {
     if (!message.member.permissions.has(PermissionsBitField.Flags.ManageGuild)) {
       return message.reply("You need the **Manage Server** permission to use that.");
@@ -175,6 +262,9 @@ client.on('messageCreate', async (message) => {
           '`!numguess` — start a number guessing game, then `!guess <number>`',
           '`!trivia` — start a trivia question, then `!answer <text>`',
           '`!scramble` — unscramble a word, then `!answer <word>`',
+          '`!flag` — guess the country flag, then `!answer <country>`',
+          '`!naruto` — guess the Naruto character from a clue, then `!answer <name>`',
+          '`!youtuber` — guess the countryball animator from a clue, then `!answer <name>`',
           '`!hangman` — start hangman, then `!letter <x>` or `!solve <word>`',
         ].join('\n')
       );
@@ -182,6 +272,7 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
+  // ---------------- TIC TAC TOE ----------------
   if (command === 'ttt') {
     const opponent = message.mentions.users.first();
     if (!opponent || opponent.bot || opponent.id === message.author.id) {
@@ -229,6 +320,7 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
+  // ---------------- ROCK PAPER SCISSORS ----------------
   if (command === 'rps') {
     const choices = ['rock', 'paper', 'scissors'];
     const userChoice = (args[0] || '').toLowerCase();
@@ -251,6 +343,7 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
+  // ---------------- NUMBER GUESSING ----------------
   if (command === 'numguess') {
     if (numberGames.has(channelId)) {
       return message.reply('A number guessing game is already running here.');
@@ -275,6 +368,40 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
+  // ---------------- FLAG GUESSING ----------------
+  if (command === 'flag') {
+    if (wordGames.has(channelId)) {
+      return message.reply('A game is already running here — finish it first with `!answer`.');
+    }
+    const pick = FLAGS[Math.floor(Math.random() * FLAGS.length)];
+    wordGames.set(channelId, { type: 'flag', answer: pick.name, display: pick.emoji });
+    message.channel.send(`🏳️ Which country's flag is this? ${pick.emoji}\nAnswer with \`!answer <country>\``);
+    return;
+  }
+
+  // ---------------- NARUTO CHARACTER GUESS ----------------
+  if (command === 'naruto') {
+    if (wordGames.has(channelId)) {
+      return message.reply('A game is already running here — finish it first with `!answer`.');
+    }
+    const pick = NARUTO_CLUES[Math.floor(Math.random() * NARUTO_CLUES.length)];
+    wordGames.set(channelId, { type: 'naruto', answer: pick.a, display: pick.clue });
+    message.channel.send(`🍥 **Guess the character:** ${pick.clue}\nAnswer with \`!answer <name>\``);
+    return;
+  }
+
+  // ---------------- YOUTUBER GUESSING ----------------
+  if (command === 'youtuber') {
+    if (wordGames.has(channelId)) {
+      return message.reply('A game is already running here — finish it first with `!answer`.');
+    }
+    const pick = YOUTUBER_CLUES[Math.floor(Math.random() * YOUTUBER_CLUES.length)];
+    wordGames.set(channelId, { type: 'youtuber', answer: pick.a, display: pick.clue });
+    message.channel.send(`📺 **Guess the countryball animator:** ${pick.clue}\nAnswer with \`!answer <name>\``);
+    return;
+  }
+
+  // ---------------- TRIVIA ----------------
   if (command === 'trivia') {
     if (wordGames.has(channelId)) {
       return message.reply('A game is already running here — finish it first with `!answer`.');
@@ -285,6 +412,7 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
+  // ---------------- SCRAMBLE ----------------
   if (command === 'scramble') {
     if (wordGames.has(channelId)) {
       return message.reply('A game is already running here — finish it first with `!answer`.');
@@ -308,6 +436,7 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
+  // ---------------- HANGMAN ----------------
   if (command === 'hangman') {
     if (hangmanGames.has(channelId)) {
       return message.reply('A Hangman game is already running here.');
