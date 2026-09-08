@@ -421,22 +421,7 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  // If a guessing game is active in this channel and the message isn't a command,
-  // treat the whole message as a guess attempt (no need to type "answer" anymore).
-  if (!message.content.startsWith(PREFIX)) {
-    const game = wordGames.get(channelId);
-    if (game) {
-      const guess = message.content.toLowerCase().trim();
-      if (guess === game.answer) {
-        wordGames.delete(channelId);
-        await message.channel.send(`✅ Correct, <@${message.author.id}>! The answer was **${game.answer}**.`);
-        setTimeout(() => {
-          if (!wordGames.has(channelId)) game.next();
-        }, 1500);
-      }
-    }
-    return;
-  }
+  if (!message.content.startsWith(PREFIX)) return;
   const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
   const command = args.shift().toLowerCase();
 
@@ -515,7 +500,7 @@ client.on('messageCreate', async (message) => {
   if (command === 'ttt') {
     const opponent = message.mentions.users.first();
     if (!opponent || opponent.bot || opponent.id === message.author.id) {
-      return message.reply('Mention a real opponent: `!ttt @user`');
+      return message.reply('Mention a real opponent: `7ttt @user`');
     }
     if (tttGames.has(channelId)) {
       return message.reply('A Tic Tac Toe game is already running in this channel.');
@@ -527,14 +512,14 @@ client.on('messageCreate', async (message) => {
     };
     tttGames.set(channelId, game);
     message.channel.send(
-      `🎮 Tic Tac Toe: <@${game.players[0]}> (❌) vs <@${game.players[1]}> (⭕)\n${renderBoard(game.board)}\n\n<@${game.players[0]}>'s turn — use \`!move <1-9>\``
+      `🎮 Tic Tac Toe: <@${game.players[0]}> (❌) vs <@${game.players[1]}> (⭕)\n${renderBoard(game.board)}\n\n<@${game.players[0]}>'s turn — use \`7move <1-9>\``
     );
     return;
   }
 
   if (command === 'move') {
     const game = tttGames.get(channelId);
-    if (!game) return message.reply('No Tic Tac Toe game running. Start one with `!ttt @user`.');
+    if (!game) return message.reply('No Tic Tac Toe game running. Start one with `7ttt @user`.');
     if (message.author.id !== game.players[game.turn]) {
       return message.reply("It's not your turn!");
     }
@@ -554,17 +539,18 @@ client.on('messageCreate', async (message) => {
     }
     game.turn = game.turn === 0 ? 1 : 0;
     message.channel.send(
-      `${renderBoard(game.board)}\n\n<@${game.players[game.turn]}>'s turn — use \`!move <1-9>\``
+      `${renderBoard(game.board)}\n\n<@${game.players[game.turn]}>'s turn — use \`7move <1-9>\``
     );
     return;
   }
 
   // ---------------- ROCK PAPER SCISSORS ----------------
-  if (command === 'rps') {
+  // Accepts both "7rps rock" and just "7rock" / "7paper" / "7scissors"
+  if (command === 'rps' || ['rock', 'paper', 'scissors'].includes(command)) {
     const choices = ['rock', 'paper', 'scissors'];
-    const userChoice = (args[0] || '').toLowerCase();
+    const userChoice = command === 'rps' ? (args[0] || '').toLowerCase() : command;
     if (!choices.includes(userChoice)) {
-      return message.reply('Choose one: `!rps rock`, `!rps paper`, or `!rps scissors`');
+      return message.reply('Choose one: `7rock`, `7paper`, or `7scissors`');
     }
     const botChoice = choices[Math.floor(Math.random() * 3)];
     let result;
@@ -589,13 +575,13 @@ client.on('messageCreate', async (message) => {
     }
     const number = Math.floor(Math.random() * 100) + 1;
     numberGames.set(channelId, { number, min: 1, max: 100, attempts: 0 });
-    message.channel.send("🔢 I'm thinking of a number between **1 and 100**. Guess with `!guess <number>`");
+    message.channel.send("🔢 I'm thinking of a number between **1 and 100**. Guess with `7guess <number>`");
     return;
   }
 
   if (command === 'guess') {
     const game = numberGames.get(channelId);
-    if (!game) return message.reply('No number game running. Start one with `!numguess`.');
+    if (!game) return message.reply('No number game running. Start one with `7numguess`.');
     const guess = parseInt(args[0], 10);
     if (isNaN(guess)) return message.reply('Guess a valid number.');
     game.attempts++;
@@ -671,16 +657,16 @@ client.on('messageCreate', async (message) => {
     const word = HANGMAN_WORDS[Math.floor(Math.random() * HANGMAN_WORDS.length)];
     hangmanGames.set(channelId, { word, guessed: new Set(), wrong: 0, maxWrong: 6 });
     message.channel.send(
-      `🪢 **Hangman started!**\n${HANGMAN_STAGES[0]}\n${hangmanDisplay(word, new Set())}\n\nGuess a letter: \`!letter <x>\` or the whole word: \`!solve <word>\``
+      `🪢 **Hangman started!**\n${HANGMAN_STAGES[0]}\n${hangmanDisplay(word, new Set())}\n\nGuess a letter: \`7letter <x>\` or the whole word: \`7solve <word>\``
     );
     return;
   }
 
   if (command === 'letter') {
     const game = hangmanGames.get(channelId);
-    if (!game) return message.reply('No Hangman game running. Start one with `!hangman`.');
+    if (!game) return message.reply('No Hangman game running. Start one with `7hangman`.');
     const letter = (args[0] || '').toLowerCase();
-    if (!letter || letter.length !== 1) return message.reply('Guess a single letter: `!letter a`');
+    if (!letter || letter.length !== 1) return message.reply('Guess a single letter: `7letter a`');
     if (game.guessed.has(letter)) return message.reply('Already guessed that letter.');
     game.guessed.add(letter);
 
@@ -703,7 +689,7 @@ client.on('messageCreate', async (message) => {
 
   if (command === 'solve') {
     const game = hangmanGames.get(channelId);
-    if (!game) return message.reply('No Hangman game running. Start one with `!hangman`.');
+    if (!game) return message.reply('No Hangman game running. Start one with `7hangman`.');
     const guess = (args[0] || '').toLowerCase();
     if (guess === game.word) {
       hangmanGames.delete(channelId);
@@ -716,6 +702,20 @@ client.on('messageCreate', async (message) => {
     }
     message.channel.send(`${HANGMAN_STAGES[game.wrong]}\nNot quite! ${hangmanDisplay(game.word, game.guessed)}`);
     return;
+  }
+
+  // ---------------- FALLBACK: treat "7<guess>" as an answer if a game is active ----------------
+  // Lets you answer with 7india, 7sasuke, 7happycountryballs, etc. without a separate command.
+  const activeGame = wordGames.get(channelId);
+  if (activeGame) {
+    const guess = [command, ...args].join(' ').toLowerCase().trim();
+    if (guess === activeGame.answer) {
+      wordGames.delete(channelId);
+      await message.channel.send(`✅ Correct, <@${message.author.id}>! The answer was **${activeGame.answer}**.`);
+      setTimeout(() => {
+        if (!wordGames.has(channelId)) activeGame.next();
+      }, 1500);
+    }
   }
 });
 
