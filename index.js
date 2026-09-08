@@ -246,9 +246,10 @@ function hangmanDisplay(word, guessed) {
     .join(' ');
 }
 
-// ---- AI Chat (Groq + Gemini, alternating with automatic fallback) ----
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
+// ---- AI Chat (Gemini + OpenRouter + Together AI, rotating with automatic fallback) ----
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+const TOGETHER_API_KEY = process.env.TOGETHER_API_KEY;
 
 function buildSystemPrompt(isOwner, authorName) {
   const ownerLine = isOwner
@@ -260,26 +261,6 @@ function buildSystemPrompt(isOwner, authorName) {
 Important context about your creator: your boss and sensei is named LochabAnime. He is a YouTuber with about 23,000 subscribers who makes countryballs animation content. He built you and you are loyal to him above anyone else in the server.
 
 ${ownerLine}`;
-}
-
-async function callGroq(systemPrompt, userMessage) {
-  if (!GROQ_API_KEY) return null;
-  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_API_KEY}` },
-    body: JSON.stringify({
-      model: 'openai/gpt-oss-120b',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userMessage },
-      ],
-      temperature: 0.8,
-      max_tokens: 400,
-    }),
-  });
-  const data = await res.json();
-  console.log('Groq raw response:', JSON.stringify(data));
-  return data?.choices?.[0]?.message?.content?.trim() || null;
 }
 
 async function callGemini(systemPrompt, userMessage) {
@@ -300,34 +281,76 @@ async function callGemini(systemPrompt, userMessage) {
   return data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null;
 }
 
-let useGroqFirst = true; // toggles each call so both providers get used turn by turn
+async function callOpenRouter(systemPrompt, userMessage) {
+  if (!OPENROUTER_API_KEY) return null;
+  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENROUTER_API_KEY}` },
+    body: JSON.stringify({
+      model: 'openrouter/free',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userMessage },
+      ],
+      temperature: 0.8,
+      max_tokens: 400,
+    }),
+  });
+  const data = await res.json();
+  console.log('OpenRouter raw response:', JSON.stringify(data));
+  return data?.choices?.[0]?.message?.content?.trim() || null;
+}
+
+async function callTogether(systemPrompt, userMessage) {
+  if (!TOGETHER_API_KEY) return null;
+  const res = await fetch('https://api.together.xyz/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOGETHER_API_KEY}` },
+    body: JSON.stringify({
+      model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo-Free',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userMessage },
+      ],
+      temperature: 0.8,
+      max_tokens: 400,
+    }),
+  });
+  const data = await res.json();
+  console.log('Together raw response:', JSON.stringify(data));
+  return data?.choices?.[0]?.message?.content?.trim() || null;
+}
+
+let providerIndex = 0;
 
 async function askGemini(userMessage, authorName, isOwner) {
-  if (!GROQ_API_KEY && !GEMINI_API_KEY) {
-    return "AI chat isn't set up yet — ask the server owner to add a GROQ_API_KEY or GEMINI_API_KEY.";
-  }
-  const systemPrompt = buildSystemPrompt(isOwner, authorName);
-  const primary = useGroqFirst ? callGroq : callGemini;
-  const secondary = useGroqFirst ? callGemini : callGroq;
-  useGroqFirst = !useGroqFirst; // flip for next call
+  const providers = [
+    { name: 'gemini', call: callGemini, active: !!GEMINI_API_KEY },
+    { name: 'openrouter', call: callOpenRouter, active: !!OPENROUTER_API_KEY },
+    { name: 'together', call: callTogether, active: !!TOGETHER_API_KEY },
+  ].filter((p) => p.active);
 
-  try {
-    let reply = await primary(systemPrompt, userMessage);
-    if (!reply) {
-      console.log('Primary provider gave no reply, falling back to secondary...');
-      reply = await secondary(systemPrompt, userMessage);
-    }
-    return reply || "Give me a sec and ask that again — I didn't quite catch a full thought there!";
-  } catch (err) {
-    console.error('AI chat error, trying fallback provider:', err);
+  if (providers.length === 0) {
+    return "AI chat isn't set up yet — ask the server owner to add an API key (GEMINI_API_KEY, OPENROUTER_API_KEY, or TOGETHER_API_KEY).";
+  }
+
+  const systemPrompt = buildSystemPrompt(isOwner, authorName);
+
+  // Rotate the starting provider each call, then fall through the rest on failure
+  const order = providers.map((_, i) => providers[(providerIndex + i) % providers.length]);
+  providerIndex = (providerIndex + 1) % providers.length;
+
+  for (const p of order) {
     try {
-      const reply = await secondary(systemPrompt, userMessage);
-      return reply || "Sorry, I'm having trouble thinking right now — try again in a bit!";
-    } catch (err2) {
-      console.error('Fallback provider also failed:', err2);
-      return "Sorry, I'm having trouble thinking right now — try again in a bit!";
+      const reply = await p.call(systemPrompt, userMessage);
+      if (reply) return reply;
+      console.log(`${p.name} gave no reply, trying next provider...`);
+    } catch (err) {
+      console.error(`${p.name} failed, trying next provider:`, err);
     }
   }
+
+  return "Sorry, I'm having trouble thinking right now — try again in a bit!";
 }
 
 // Basic commands + "talk to everyone" behavior
