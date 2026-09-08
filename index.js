@@ -270,6 +270,7 @@ async function askGemini(userMessage) {
       }
     );
     const data = await res.json();
+    console.log('Gemini raw response:', JSON.stringify(data));
     const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
     return reply ? reply.trim() : "Hmm, I couldn't think of a reply to that!";
   } catch (err) {
