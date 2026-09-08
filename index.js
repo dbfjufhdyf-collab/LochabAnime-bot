@@ -64,7 +64,7 @@ async function sendDailyNews() {
       .setColor(0xff4500)
       .setTitle('🗞️ Today\'s Top World News')
       .setDescription(
-        topStories.map((item, i) => `**\( {i + 1}. [ \){item.title}](${item.link})**`).join('\n\n')
+        topStories.map((item, i) => `**${i + 1}. [${item.title}](${item.link})**`).join('\n\n')
       )
       .setFooter({ text: 'Source: BBC News' })
       .setTimestamp();
@@ -111,7 +111,7 @@ const hangmanGames = new Map();  // channelId -> {word, guessed:Set, wrong, maxW
 const TTT_EMOJI = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
 function renderBoard(board) {
   const cells = board.map((v, i) => (v === null ? TTT_EMOJI[i] : v === 'X' ? '❌' : '⭕'));
-  return `\( {cells[0]} \){cells[1]}\( {cells[2]}\n \){cells[3]}\( {cells[4]} \){cells[5]}\n\( {cells[6]} \){cells[7]}${cells[8]}`;
+  return `${cells[0]}${cells[1]}${cells[2]}\n${cells[3]}${cells[4]}${cells[5]}\n${cells[6]}${cells[7]}${cells[8]}`;
 }
 function checkWinner(board) {
   const lines = [
@@ -246,12 +246,9 @@ function hangmanDisplay(word, guessed) {
     .join(' ');
 }
 
-// =========================================================
-// AI CHAT (Gemini → Cerebras → OpenRouter automatic fallback)
-// =========================================================
+// ---- AI Chat (Groq + Gemini, alternating with automatic fallback) ----
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const CEREBRAS_API_KEY = process.env.CEREBRAS_API_KEY;
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
 function buildSystemPrompt(isOwner, authorName) {
   const ownerLine = isOwner
@@ -265,130 +262,72 @@ Important context about your creator: your boss and sensei is named LochabAnime.
 ${ownerLine}`;
 }
 
+async function callGroq(systemPrompt, userMessage) {
+  if (!GROQ_API_KEY) return null;
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_API_KEY}` },
+    body: JSON.stringify({
+      model: 'openai/gpt-oss-120b',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userMessage },
+      ],
+      temperature: 0.8,
+      max_tokens: 400,
+    }),
+  });
+  const data = await res.json();
+  console.log('Groq raw response:', JSON.stringify(data));
+  return data?.choices?.[0]?.message?.content?.trim() || null;
+}
+
 async function callGemini(systemPrompt, userMessage) {
   if (!GEMINI_API_KEY) return null;
-  try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                {
-                  text: `\( {systemPrompt}\n\nNow respond to this message: " \){userMessage}"`,
-                },
-              ],
-            },
-          ],
-          generationConfig: { temperature: 0.8, maxOutputTokens: 400 },
-        }),
-      }
-    );
-    const data = await res.json();
-    if (!res.ok) {
-      console.log('Gemini error:', data);
-      return null;
-    }
-    return data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null;
-  } catch (err) {
-    console.error('Gemini failed:', err.message);
-    return null;
-  }
-}
-
-async function callCerebras(systemPrompt, userMessage) {
-  if (!CEREBRAS_API_KEY) return null;
-  try {
-    const res = await fetch('https://api.cerebras.ai/v1/chat/completions', {
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+    {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${CEREBRAS_API_KEY}`,
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'llama3.1-8b',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userMessage },
-        ],
-        temperature: 0.8,
-        max_tokens: 400,
+        contents: [{ parts: [{ text: `${systemPrompt}\n\nNow respond to this message: "${userMessage}"` }] }],
+        generationConfig: { temperature: 0.8, maxOutputTokens: 400 },
       }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      console.log('Cerebras error:', data);
-      return null;
     }
-    return data?.choices?.[0]?.message?.content?.trim() || null;
-  } catch (err) {
-    console.error('Cerebras failed:', err.message);
-    return null;
-  }
+  );
+  const data = await res.json();
+  console.log('Gemini raw response:', JSON.stringify(data));
+  return data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null;
 }
 
-async function callOpenRouter(systemPrompt, userMessage) {
-  if (!OPENROUTER_API_KEY) return null;
-  try {
-    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-        'HTTP-Referer': 'https://discord.com',
-        'X-Title': 'LochabAnime Bot',
-      },
-      body: JSON.stringify({
-        model: 'meta-llama/llama-3.3-70b-instruct:free',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userMessage },
-        ],
-        temperature: 0.8,
-        max_tokens: 400,
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      console.log('OpenRouter error:', data);
-      return null;
-    }
-    return data?.choices?.[0]?.message?.content?.trim() || null;
-  } catch (err) {
-    console.error('OpenRouter failed:', err.message);
-    return null;
-  }
-}
+let useGroqFirst = true; // toggles each call so both providers get used turn by turn
 
-// Main AI function — tries providers one by one until one works
-async function askAI(userMessage, authorName, isOwner) {
-  if (!GEMINI_API_KEY && !CEREBRAS_API_KEY && !OPENROUTER_API_KEY) {
-    return "AI chat isn't set up yet — ask the server owner to add at least one API key (GEMINI / CEREBRAS / OPENROUTER).";
+async function askGemini(userMessage, authorName, isOwner) {
+  if (!GROQ_API_KEY && !GEMINI_API_KEY) {
+    return "AI chat isn't set up yet — ask the server owner to add a GROQ_API_KEY or GEMINI_API_KEY.";
   }
-
   const systemPrompt = buildSystemPrompt(isOwner, authorName);
+  const primary = useGroqFirst ? callGroq : callGemini;
+  const secondary = useGroqFirst ? callGemini : callGroq;
+  useGroqFirst = !useGroqFirst; // flip for next call
 
-  // Order: Gemini → Cerebras → OpenRouter
-  const providers = [
-    { name: 'Gemini', fn: callGemini },
-    { name: 'Cerebras', fn: callCerebras },
-    { name: 'OpenRouter', fn: callOpenRouter },
-  ];
-
-  for (const provider of providers) {
-    console.log(`Trying ${provider.name}...`);
-    const reply = await provider.fn(systemPrompt, userMessage);
-    if (reply) {
-      console.log(`✅ Reply from ${provider.name}`);
-      return reply;
+  try {
+    let reply = await primary(systemPrompt, userMessage);
+    if (!reply) {
+      console.log('Primary provider gave no reply, falling back to secondary...');
+      reply = await secondary(systemPrompt, userMessage);
     }
-    console.log(`❌ ${provider.name} failed / overloaded, trying next...`);
+    return reply || "Give me a sec and ask that again — I didn't quite catch a full thought there!";
+  } catch (err) {
+    console.error('AI chat error, trying fallback provider:', err);
+    try {
+      const reply = await secondary(systemPrompt, userMessage);
+      return reply || "Sorry, I'm having trouble thinking right now — try again in a bit!";
+    } catch (err2) {
+      console.error('Fallback provider also failed:', err2);
+      return "Sorry, I'm having trouble thinking right now — try again in a bit!";
+    }
   }
-
-  return "Sorry, all AI providers are currently overloaded. Please try again in a few seconds!";
 }
 
 // Basic commands + "talk to everyone" behavior
@@ -406,7 +345,7 @@ client.on('messageCreate', async (message) => {
     await message.channel.sendTyping().catch(() => {});
     const displayName = (message.member?.displayName || message.author.username || '').toLowerCase();
     const isOwner = displayName.includes('lochabanime');
-    const aiReply = await askAI(cleanMessage, message.author.username, isOwner);
+    const aiReply = await askGemini(cleanMessage, message.author.username, isOwner);
     message.reply(aiReply).catch(console.error);
     return;
   }
@@ -426,7 +365,7 @@ client.on('messageCreate', async (message) => {
       .setColor(0xff4500)
       .setTitle('👋 Welcome, everyone!')
       .setDescription(
-        `Big shoutout to all \( {humanMembers.size} members already here — glad to have you all in ** \){message.guild.name}**!`
+        `Big shoutout to all ${humanMembers.size} members already here — glad to have you all in **${message.guild.name}**!`
       );
     message.channel.send({ embeds: [embed] }).catch(console.error);
     return;
@@ -473,7 +412,7 @@ client.on('messageCreate', async (message) => {
         .setColor(0xff4500)
         .setTitle('🗞️ Today\'s Top World News')
         .setDescription(
-          topStories.map((item, i) => `**\( {i + 1}. [ \){item.title}](${item.link})**`).join('\n\n')
+          topStories.map((item, i) => `**${i + 1}. [${item.title}](${item.link})**`).join('\n\n')
         )
         .setFooter({ text: 'Source: BBC News' })
         .setTimestamp();
@@ -501,7 +440,7 @@ client.on('messageCreate', async (message) => {
     };
     tttGames.set(channelId, game);
     message.channel.send(
-      `🎮 Tic Tac Toe: <@\( {game.players[0]}> (❌) vs <@ \){game.players[1]}> (⭕)\n\( {renderBoard(game.board)}\n\n<@ \){game.players[0]}>'s turn — use \`!move <1-9>\``
+      `🎮 Tic Tac Toe: <@${game.players[0]}> (❌) vs <@${game.players[1]}> (⭕)\n${renderBoard(game.board)}\n\n<@${game.players[0]}>'s turn — use \`!move <1-9>\``
     );
     return;
   }
@@ -524,11 +463,11 @@ client.on('messageCreate', async (message) => {
         return message.channel.send(`${renderBoard(game.board)}\n\n🤝 It's a draw!`);
       }
       const winnerId = winner === 'X' ? game.players[0] : game.players[1];
-      return message.channel.send(`\( {renderBoard(game.board)}\n\n🏆 <@ \){winnerId}> wins!`);
+      return message.channel.send(`${renderBoard(game.board)}\n\n🏆 <@${winnerId}> wins!`);
     }
     game.turn = game.turn === 0 ? 1 : 0;
     message.channel.send(
-      `\( {renderBoard(game.board)}\n\n<@ \){game.players[game.turn]}>'s turn — use \`!move <1-9>\``
+      `${renderBoard(game.board)}\n\n<@${game.players[game.turn]}>'s turn — use \`!move <1-9>\``
     );
     return;
   }
@@ -552,7 +491,7 @@ client.on('messageCreate', async (message) => {
     } else {
       result = '🤖 I win!';
     }
-    message.reply(`You chose **\( {userChoice}**, I chose ** \){botChoice}**. ${result}`);
+    message.reply(`You chose **${userChoice}**, I chose **${botChoice}**. ${result}`);
     return;
   }
 
@@ -575,7 +514,7 @@ client.on('messageCreate', async (message) => {
     game.attempts++;
     if (guess === game.number) {
       numberGames.delete(channelId);
-      return message.channel.send(`🎉 <@\( {message.author.id}> got it! The number was ** \){game.number}** (${game.attempts} attempts).`);
+      return message.channel.send(`🎉 <@${message.author.id}> got it! The number was **${game.number}** (${game.attempts} attempts).`);
     }
     message.reply(guess < game.number ? '📈 Higher!' : '📉 Lower!');
     return;
@@ -643,7 +582,7 @@ client.on('messageCreate', async (message) => {
     const guess = args.join(' ').toLowerCase().trim();
     if (guess === game.answer) {
       wordGames.delete(channelId);
-      return message.channel.send(`✅ Correct, <@\( {message.author.id}>! The answer was ** \){game.answer}**.`);
+      return message.channel.send(`✅ Correct, <@${message.author.id}>! The answer was **${game.answer}**.`);
     }
     message.reply('❌ Not quite, try again!');
     return;
@@ -657,7 +596,7 @@ client.on('messageCreate', async (message) => {
     const word = HANGMAN_WORDS[Math.floor(Math.random() * HANGMAN_WORDS.length)];
     hangmanGames.set(channelId, { word, guessed: new Set(), wrong: 0, maxWrong: 6 });
     message.channel.send(
-      `🪢 **Hangman started!**\n\( {HANGMAN_STAGES[0]}\n \){hangmanDisplay(word, new Set())}\n\nGuess a letter: \`!letter <x>\` or the whole word: \`!solve <word>\``
+      `🪢 **Hangman started!**\n${HANGMAN_STAGES[0]}\n${hangmanDisplay(word, new Set())}\n\nGuess a letter: \`!letter <x>\` or the whole word: \`!solve <word>\``
     );
     return;
   }
@@ -681,9 +620,9 @@ client.on('messageCreate', async (message) => {
     }
     if (game.wrong >= game.maxWrong) {
       hangmanGames.delete(channelId);
-      return message.channel.send(`\( {HANGMAN_STAGES[game.wrong]}\n💀 Game over! The word was ** \){game.word}**.`);
+      return message.channel.send(`${HANGMAN_STAGES[game.wrong]}\n💀 Game over! The word was **${game.word}**.`);
     }
-    message.channel.send(`\( {HANGMAN_STAGES[game.wrong]}\n \){display}`);
+    message.channel.send(`${HANGMAN_STAGES[game.wrong]}\n${display}`);
     return;
   }
 
@@ -693,12 +632,12 @@ client.on('messageCreate', async (message) => {
     const guess = (args[0] || '').toLowerCase();
     if (guess === game.word) {
       hangmanGames.delete(channelId);
-      return message.channel.send(`🎉 <@\( {message.author.id}> solved it! The word was ** \){game.word}**.`);
+      return message.channel.send(`🎉 <@${message.author.id}> solved it! The word was **${game.word}**.`);
     }
     game.wrong++;
     if (game.wrong >= game.maxWrong) {
       hangmanGames.delete(channelId);
-      return message.channel.send(`\( {HANGMAN_STAGES[game.wrong]}\n💀 Game over! The word was ** \){game.word}**.`);
+      return message.channel.send(`${HANGMAN_STAGES[game.wrong]}\n💀 Game over! The word was **${game.word}**.`);
     }
     message.channel.send(`${HANGMAN_STAGES[game.wrong]}\nNot quite! ${hangmanDisplay(game.word, game.guessed)}`);
     return;
