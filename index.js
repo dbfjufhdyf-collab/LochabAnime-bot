@@ -715,7 +715,10 @@ client.on('messageCreate', async (message) => {
       setTimeout(() => {
         if (!wordGames.has(channelId)) activeGame.next();
       }, 1500);
+    } else {
+      message.reply('❌ Wrong, try again!').catch(console.error);
     }
+    return;
   }
 });
 
