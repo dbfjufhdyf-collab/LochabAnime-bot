@@ -248,45 +248,51 @@ function hangmanDisplay(word, guessed) {
 
 // ---- AI Chat (Google Gemini, free tier) ----
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+async function callGeminiOnce(prompt) {
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${GEMINI_API_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.8, maxOutputTokens: 400 },
+      }),
+    }
+  );
+  return res.json();
+}
+
 async function askGemini(userMessage, authorName, isOwner) {
   if (!GEMINI_API_KEY) return "AI chat isn't set up yet — ask the server owner to add a GEMINI_API_KEY.";
-  try {
-    const ownerLine = isOwner
-      ? `The person messaging you right now is your boss and sensei — LochabAnime, the creator of this very bot. Always address him as "boss" and speak to him with real respect and loyalty, like a devoted student would to their sensei. Never be dismissive or short with him.`
-      : `The person messaging you is a regular server member named ${authorName}.`;
+  const ownerLine = isOwner
+    ? `The person messaging you right now is your boss and sensei — LochabAnime, the creator of this very bot. Always address him as "boss" and speak to him with real respect and loyalty, like a devoted student would to their sensei. Never be dismissive or short with him.`
+    : `The person messaging you is a regular server member named ${authorName}.`;
 
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                {
-                  text: `You are LochabAnime, a Discord bot with a genius-level intellect — think and reason like someone with an IQ of 200. You are extremely knowledgeable across every topic (science, history, math, coding, pop culture, anime, everything), and you always give a real, complete, well-reasoned answer. You NEVER give a vague, lazy, or empty reply, and you NEVER say things like "I don't know" or "I couldn't think of a reply" — if a question is unclear, make a smart, confident guess at what's being asked and answer that. Keep replies conversational (2-4 sentences unless real depth is needed), with a friendly anime/shinobi vibe.
+  const prompt = `You are LochabAnime, a Discord bot with a genius-level intellect — think and reason like someone with an IQ of 200. You are extremely knowledgeable across every topic (science, history, math, coding, pop culture, anime, everything), and you always give a real, complete, well-reasoned answer. You NEVER give a vague, lazy, or empty reply, and you NEVER say things like "I don't know" or "I couldn't think of a reply" — if a question is unclear, make a smart, confident guess at what's being asked and answer that. Keep replies conversational (2-4 sentences unless real depth is needed), with a friendly anime/shinobi vibe.
 
 Important context about your creator: your boss and sensei is named LochabAnime. He is a YouTuber with about 23,000 subscribers who makes countryballs animation content. He built you and you are loyal to him above anyone else in the server.
 
 ${ownerLine}
 
-Now respond to this message: "${userMessage}"`,
-                },
-              ],
-            },
-          ],
-          generationConfig: {
-            temperature: 0.8,
-            maxOutputTokens: 400,
-          },
-        }),
-      }
-    );
-    const data = await res.json();
+Now respond to this message: "${userMessage}"`;
+
+  try {
+    let data = await callGeminiOnce(prompt);
     console.log('Gemini raw response:', JSON.stringify(data));
+
+    // If the model is temporarily overloaded, wait 2s and try once more
+    if (data?.error?.code === 503) {
+      await new Promise((r) => setTimeout(r, 2000));
+      data = await callGeminiOnce(prompt);
+      console.log('Gemini retry response:', JSON.stringify(data));
+    }
+
     if (data?.error?.code === 429) {
       return "Whoa, too many people are talking to me right now! Give me like 30 seconds and try again 😅";
+    }
+    if (data?.error?.code === 503) {
+      return "Google's AI servers are a bit overloaded right now — give it a minute and ask again!";
     }
     const blockReason = data?.promptFeedback?.blockReason;
     const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
