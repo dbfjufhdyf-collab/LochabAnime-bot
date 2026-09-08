@@ -24,7 +24,7 @@ const client = new Client({
 // ---- CONFIG ----
 const WELCOME_CHANNEL_NAME = process.env.WELCOME_CHANNEL_NAME || 'welcome';
 const NEWS_CHANNEL_NAME = process.env.NEWS_CHANNEL_NAME || 'news';
-const PREFIX = '!';
+const PREFIX = '7';
 
 const GREETINGS = [
   "Welcome to the village, {user}! Grab a seat, the mission board's over there.",
@@ -246,6 +246,39 @@ function hangmanDisplay(word, guessed) {
     .join(' ');
 }
 
+// ---- Continuous round starters for the answer-based games ----
+// Each game keeps going (auto-asks a new question) until someone uses the stop command.
+function startFlagRound(channel) {
+  const pick = FLAGS[Math.floor(Math.random() * FLAGS.length)];
+  wordGames.set(channel.id, { type: 'flag', answer: pick.name, next: () => startFlagRound(channel) });
+  channel.send(`🏳️ Which country's flag is this? ${pick.emoji}`);
+}
+
+function startNarutoRound(channel) {
+  const pick = NARUTO_CLUES[Math.floor(Math.random() * NARUTO_CLUES.length)];
+  wordGames.set(channel.id, { type: 'naruto', answer: pick.a, next: () => startNarutoRound(channel) });
+  channel.send(`🍥 **Guess the character:** ${pick.clue}`);
+}
+
+function startYoutuberRound(channel) {
+  const pick = YOUTUBER_CLUES[Math.floor(Math.random() * YOUTUBER_CLUES.length)];
+  wordGames.set(channel.id, { type: 'youtuber', answer: pick.a, next: () => startYoutuberRound(channel) });
+  channel.send(`📺 **Guess the countryball animator:** ${pick.clue}`);
+}
+
+function startTriviaRound(channel) {
+  const pick = TRIVIA_QUESTIONS[Math.floor(Math.random() * TRIVIA_QUESTIONS.length)];
+  wordGames.set(channel.id, { type: 'trivia', answer: pick.a, next: () => startTriviaRound(channel) });
+  channel.send(`🧠 **Trivia:** ${pick.q}`);
+}
+
+function startScrambleRound(channel) {
+  const word = SCRAMBLE_WORDS[Math.floor(Math.random() * SCRAMBLE_WORDS.length)];
+  const scrambled = scrambleWord(word);
+  wordGames.set(channel.id, { type: 'scramble', answer: word, next: () => startScrambleRound(channel) });
+  channel.send(`🔤 Unscramble this word: **${scrambled.toUpperCase()}**`);
+}
+
 // ---- AI Chat (Gemini + OpenRouter + Together AI, rotating with automatic fallback) ----
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
@@ -256,7 +289,7 @@ function buildSystemPrompt(isOwner, authorName) {
     ? `The person messaging you right now is your boss and sensei — LochabAnime, the creator of this very bot. Always address him as "boss" and speak to him with real respect and loyalty, like a devoted student would to their sensei. Never be dismissive or short with him.`
     : `The person messaging you is a regular server member named ${authorName}.`;
 
-  return `You are LochabAnime, a Discord bot with a genius-level intellect — think and reason like someone with an IQ of 200. You are extremely knowledgeable across every topic (science, history, math, coding, pop culture, anime, everything), and you always give a real, complete, well-reasoned answer. You NEVER give a vague, lazy, or empty reply, and you NEVER say things like "I don't know" — if a question is unclear, make a smart, confident guess at what's being asked and answer that. Keep replies conversational (2-4 sentences unless real depth is needed), with a friendly anime/shinobi vibe.
+  return `You are LochabAnime, a Discord bot with a genius-level intellect. You are extremely knowledgeable across every topic and always give a real, direct, correct answer. You NEVER say "I don't know". Keep replies VERY SHORT — 1 to 2 short sentences MAX, no long explanations unless the person explicitly asks for detail. Friendly anime/shinobi vibe.
 
 Important context about your creator: your boss and sensei is named LochabAnime. He is a YouTuber with about 23,000 subscribers who makes countryballs animation content. He built you and you are loyal to him above anyone else in the server.
 
@@ -272,7 +305,7 @@ async function callGemini(systemPrompt, userMessage) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: `${systemPrompt}\n\nNow respond to this message: "${userMessage}"` }] }],
-        generationConfig: { temperature: 0.8, maxOutputTokens: 400 },
+        generationConfig: { temperature: 0.8, maxOutputTokens: 120 },
       }),
     }
   );
@@ -293,7 +326,7 @@ async function callOpenRouter(systemPrompt, userMessage) {
         { role: 'user', content: userMessage },
       ],
       temperature: 0.8,
-      max_tokens: 400,
+      max_tokens: 120,
     }),
   });
   const data = await res.json();
@@ -313,7 +346,7 @@ async function callTogether(systemPrompt, userMessage) {
         { role: 'user', content: userMessage },
       ],
       temperature: 0.8,
-      max_tokens: 400,
+      max_tokens: 120,
     }),
   });
   const data = await res.json();
@@ -354,6 +387,9 @@ async function askGemini(userMessage, authorName, isOwner) {
 }
 
 // Basic commands + "talk to everyone" behavior
+const AI_COOLDOWN_MS = 5000;
+const aiCooldowns = new Map(); // userId -> timestamp of last AI request
+
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
   const channelId = message.channel.id;
@@ -365,6 +401,18 @@ client.on('messageCreate', async (message) => {
       message.reply(pickGreeting(`<@${message.author.id}>`)).catch(console.error);
       return;
     }
+
+    // Per-user cooldown so rapid-fire questions don't overload the AI providers
+    const now = Date.now();
+    const lastUsed = aiCooldowns.get(message.author.id) || 0;
+    const elapsed = now - lastUsed;
+    if (elapsed < AI_COOLDOWN_MS) {
+      const remaining = ((AI_COOLDOWN_MS - elapsed) / 1000).toFixed(1);
+      message.reply(`⏳ Slow down! Wait **${remaining}s** before asking me another question.`).catch(console.error);
+      return;
+    }
+    aiCooldowns.set(message.author.id, now);
+
     await message.channel.sendTyping().catch(() => {});
     const displayName = (message.member?.displayName || message.author.username || '').toLowerCase();
     const isOwner = displayName.includes('lochabanime');
@@ -373,7 +421,22 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  if (!message.content.startsWith(PREFIX)) return;
+  // If a guessing game is active in this channel and the message isn't a command,
+  // treat the whole message as a guess attempt (no need to type "answer" anymore).
+  if (!message.content.startsWith(PREFIX)) {
+    const game = wordGames.get(channelId);
+    if (game) {
+      const guess = message.content.toLowerCase().trim();
+      if (guess === game.answer) {
+        wordGames.delete(channelId);
+        await message.channel.send(`✅ Correct, <@${message.author.id}>! The answer was **${game.answer}**.`);
+        setTimeout(() => {
+          if (!wordGames.has(channelId)) game.next();
+        }, 1500);
+      }
+    }
+    return;
+  }
   const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
   const command = args.shift().toLowerCase();
 
@@ -406,20 +469,21 @@ client.on('messageCreate', async (message) => {
       .setDescription(
         [
           '**Utility**',
-          '`!ping` — health check',
-          '`!welcomeall` — greet everyone (admin only)',
-          '`!news` — get today\'s top world news',
+          '`7ping` — health check',
+          '`7welcomeall` — greet everyone (admin only)',
+          '`7news` — get today\'s top world news',
           '',
-          '**Games**',
-          '`!ttt @user` — start Tic Tac Toe, then `!move <1-9>`',
-          '`!rps <rock/paper/scissors>` — play vs the bot',
-          '`!numguess` — start a number guessing game, then `!guess <number>`',
-          '`!trivia` — start a trivia question, then `!answer <text>`',
-          '`!scramble` — unscramble a word, then `!answer <word>`',
-          '`!flag` — guess the country flag, then `!answer <country>`',
-          '`!naruto` — guess the Naruto character from a clue, then `!answer <name>`',
-          '`!youtuber` — guess the countryball animator from a clue, then `!answer <name>`',
-          '`!hangman` — start hangman, then `!letter <x>` or `!solve <word>`',
+          '**Games** (all keep going until you type `7stop`)',
+          '`7ttt @user` — start Tic Tac Toe, then `7move <1-9>`',
+          '`7rps <rock/paper/scissors>` — play vs the bot',
+          '`7numguess` — start a number guessing game, then `7guess <number>`',
+          '`7trivia` — trivia questions, just type your answer directly',
+          '`7scramble` — unscramble words, just type your answer directly',
+          '`7flag` — guess country flags, just type the country name',
+          '`7naruto` — guess the Naruto character, just type the name',
+          '`7youtuber` — guess the countryball animator, just type the name',
+          '`7hangman` — start hangman, then `7letter <x>` or `7solve <word>`',
+          '`7stop` — stop whatever game is currently running',
         ].join('\n')
       );
     message.channel.send({ embeds: [embed] });
@@ -546,68 +610,56 @@ client.on('messageCreate', async (message) => {
   // ---------------- FLAG GUESSING ----------------
   if (command === 'flag') {
     if (wordGames.has(channelId)) {
-      return message.reply('A game is already running here — finish it first with `!answer`.');
+      return message.reply('A game is already running here — just type your guess!');
     }
-    const pick = FLAGS[Math.floor(Math.random() * FLAGS.length)];
-    wordGames.set(channelId, { type: 'flag', answer: pick.name, display: pick.emoji });
-    message.channel.send(`🏳️ Which country's flag is this? ${pick.emoji}\nAnswer with \`!answer <country>\``);
+    startFlagRound(message.channel);
     return;
   }
 
   // ---------------- NARUTO CHARACTER GUESS ----------------
   if (command === 'naruto') {
     if (wordGames.has(channelId)) {
-      return message.reply('A game is already running here — finish it first with `!answer`.');
+      return message.reply('A game is already running here — just type your guess!');
     }
-    const pick = NARUTO_CLUES[Math.floor(Math.random() * NARUTO_CLUES.length)];
-    wordGames.set(channelId, { type: 'naruto', answer: pick.a, display: pick.clue });
-    message.channel.send(`🍥 **Guess the character:** ${pick.clue}\nAnswer with \`!answer <name>\``);
+    startNarutoRound(message.channel);
     return;
   }
 
   // ---------------- YOUTUBER GUESSING ----------------
   if (command === 'youtuber') {
     if (wordGames.has(channelId)) {
-      return message.reply('A game is already running here — finish it first with `!answer`.');
+      return message.reply('A game is already running here — just type your guess!');
     }
-    const pick = YOUTUBER_CLUES[Math.floor(Math.random() * YOUTUBER_CLUES.length)];
-    wordGames.set(channelId, { type: 'youtuber', answer: pick.a, display: pick.clue });
-    message.channel.send(`📺 **Guess the countryball animator:** ${pick.clue}\nAnswer with \`!answer <name>\``);
+    startYoutuberRound(message.channel);
     return;
   }
 
   // ---------------- TRIVIA ----------------
   if (command === 'trivia') {
     if (wordGames.has(channelId)) {
-      return message.reply('A game is already running here — finish it first with `!answer`.');
+      return message.reply('A game is already running here — just type your guess!');
     }
-    const pick = TRIVIA_QUESTIONS[Math.floor(Math.random() * TRIVIA_QUESTIONS.length)];
-    wordGames.set(channelId, { type: 'trivia', answer: pick.a, display: pick.q });
-    message.channel.send(`🧠 **Trivia:** ${pick.q}\nAnswer with \`!answer <your answer>\``);
+    startTriviaRound(message.channel);
     return;
   }
 
   // ---------------- SCRAMBLE ----------------
   if (command === 'scramble') {
     if (wordGames.has(channelId)) {
-      return message.reply('A game is already running here — finish it first with `!answer`.');
+      return message.reply('A game is already running here — just type your guess!');
     }
-    const word = SCRAMBLE_WORDS[Math.floor(Math.random() * SCRAMBLE_WORDS.length)];
-    const scrambled = scrambleWord(word);
-    wordGames.set(channelId, { type: 'scramble', answer: word, display: scrambled });
-    message.channel.send(`🔤 Unscramble this word: **${scrambled.toUpperCase()}**\nAnswer with \`!answer <word>\``);
+    startScrambleRound(message.channel);
     return;
   }
 
-  if (command === 'answer') {
-    const game = wordGames.get(channelId);
-    if (!game) return message.reply('No trivia/scramble game running. Start one with `!trivia` or `!scramble`.');
-    const guess = args.join(' ').toLowerCase().trim();
-    if (guess === game.answer) {
-      wordGames.delete(channelId);
-      return message.channel.send(`✅ Correct, <@${message.author.id}>! The answer was **${game.answer}**.`);
-    }
-    message.reply('❌ Not quite, try again!');
+  // ---------------- STOP ANY GAME ----------------
+  if (command === 'stop') {
+    let stopped = false;
+    if (wordGames.delete(channelId)) stopped = true;
+    if (hangmanGames.delete(channelId)) stopped = true;
+    if (tttGames.delete(channelId)) stopped = true;
+    if (numberGames.delete(channelId)) stopped = true;
+    message.reply(stopped ? '🛑 Game stopped.' : 'No game is currently running here.');
     return;
   }
 
