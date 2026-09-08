@@ -248,9 +248,13 @@ function hangmanDisplay(word, guessed) {
 
 // ---- AI Chat (Google Gemini, free tier) ----
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-async function askGemini(userMessage) {
+async function askGemini(userMessage, authorName, isOwner) {
   if (!GEMINI_API_KEY) return "AI chat isn't set up yet — ask the server owner to add a GEMINI_API_KEY.";
   try {
+    const ownerLine = isOwner
+      ? `The person messaging you right now is your boss and sensei — LochabAnime, the creator of this very bot. Always address him as "boss" and speak to him with real respect and loyalty, like a devoted student would to their sensei. Never be dismissive or short with him.`
+      : `The person messaging you is a regular server member named ${authorName}.`;
+
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${GEMINI_API_KEY}`,
       {
@@ -261,18 +265,34 @@ async function askGemini(userMessage) {
             {
               parts: [
                 {
-                  text: `You are LochabAnime, a friendly, casual Discord bot with an anime/shinobi vibe. Keep replies short (1-3 sentences), warm, and conversational. Respond to this message from a server member: "${userMessage}"`,
+                  text: `You are LochabAnime, an extremely knowledgeable, sharp-witted Discord bot with a friendly anime/shinobi vibe. You think things through carefully and give accurate, well-reasoned, complete answers to ANY question — never refuse, never give a vague non-answer, never say you can't think of a reply. If a question is broad, still give your best concrete answer. Keep replies conversational (2-4 sentences unless the question genuinely needs more detail).
+
+Important context about your creator: your boss/sensei is named LochabAnime. He is a YouTuber with about 23,000 subscribers who makes countryballs animation content.
+
+${ownerLine}
+
+Now respond to this message: "${userMessage}"`,
                 },
               ],
             },
           ],
+          generationConfig: {
+            temperature: 0.8,
+            maxOutputTokens: 400,
+          },
         }),
       }
     );
     const data = await res.json();
     console.log('Gemini raw response:', JSON.stringify(data));
+    if (data?.error?.code === 429) {
+      return "Whoa, too many people are talking to me right now! Give me like 30 seconds and try again 😅";
+    }
+    const blockReason = data?.promptFeedback?.blockReason;
     const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    return reply ? reply.trim() : "Hmm, I couldn't think of a reply to that!";
+    if (reply) return reply.trim();
+    if (blockReason) return `Hmm, I can't answer that one (${blockReason}). Try rephrasing?`;
+    return "Give me a sec and ask that again — I didn't quite catch a full thought there!";
   } catch (err) {
     console.error('Gemini API error:', err);
     return "Sorry, I'm having trouble thinking right now — try again in a bit!";
@@ -292,7 +312,8 @@ client.on('messageCreate', async (message) => {
       return;
     }
     await message.channel.sendTyping().catch(() => {});
-    const aiReply = await askGemini(cleanMessage);
+    const isOwner = message.author.username.toLowerCase() === 'lochabanime';
+    const aiReply = await askGemini(cleanMessage, message.author.username, isOwner);
     message.reply(aiReply).catch(console.error);
     return;
   }
