@@ -256,7 +256,7 @@ async function askGemini(userMessage, authorName, isOwner) {
       : `The person messaging you is a regular server member named ${authorName}.`;
 
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash:generateContent?key=${GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -265,9 +265,9 @@ async function askGemini(userMessage, authorName, isOwner) {
             {
               parts: [
                 {
-                  text: `You are LochabAnime, an extremely knowledgeable, sharp-witted Discord bot with a friendly anime/shinobi vibe. You think things through carefully and give accurate, well-reasoned, complete answers to ANY question — never refuse, never give a vague non-answer, never say you can't think of a reply. If a question is broad, still give your best concrete answer. Keep replies conversational (2-4 sentences unless the question genuinely needs more detail).
+                  text: `You are LochabAnime, a Discord bot with a genius-level intellect — think and reason like someone with an IQ of 200. You are extremely knowledgeable across every topic (science, history, math, coding, pop culture, anime, everything), and you always give a real, complete, well-reasoned answer. You NEVER give a vague, lazy, or empty reply, and you NEVER say things like "I don't know" or "I couldn't think of a reply" — if a question is unclear, make a smart, confident guess at what's being asked and answer that. Keep replies conversational (2-4 sentences unless real depth is needed), with a friendly anime/shinobi vibe.
 
-Important context about your creator: your boss/sensei is named LochabAnime. He is a YouTuber with about 23,000 subscribers who makes countryballs animation content.
+Important context about your creator: your boss and sensei is named LochabAnime. He is a YouTuber with about 23,000 subscribers who makes countryballs animation content. He built you and you are loyal to him above anyone else in the server.
 
 ${ownerLine}
 
@@ -312,7 +312,8 @@ client.on('messageCreate', async (message) => {
       return;
     }
     await message.channel.sendTyping().catch(() => {});
-    const isOwner = message.author.username.toLowerCase() === 'lochabanime';
+    const displayName = (message.member?.displayName || message.author.username || '').toLowerCase();
+    const isOwner = displayName.includes('lochabanime');
     const aiReply = await askGemini(cleanMessage, message.author.username, isOwner);
     message.reply(aiReply).catch(console.error);
     return;
