@@ -279,10 +279,17 @@ function startScrambleRound(channel) {
   channel.send(`🔤 Unscramble this word: **${scrambled.toUpperCase()}**`);
 }
 
-// ---- AI Chat (Gemini + OpenRouter + Together AI, rotating with automatic fallback) ----
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-const TOGETHER_API_KEY = process.env.TOGETHER_API_KEY;
+// ---- AI Chat (Gemini + OpenRouter + Together AI — supports MULTIPLE keys per provider) ----
+// Set multiple keys as a comma-separated list, e.g. GEMINI_API_KEY=key1,key2,key3
+function parseKeys(envVal) {
+  return (envVal || '')
+    .split(',')
+    .map((k) => k.trim())
+    .filter(Boolean);
+}
+const GEMINI_KEYS = parseKeys(process.env.GEMINI_API_KEY);
+const OPENROUTER_KEYS = parseKeys(process.env.OPENROUTER_API_KEY);
+const TOGETHER_KEYS = parseKeys(process.env.TOGETHER_API_KEY);
 
 function buildSystemPrompt(isOwner, authorName) {
   const ownerLine = isOwner
@@ -296,33 +303,39 @@ Important context about your creator: your boss and sensei is named LochabAnime.
 ${ownerLine}`;
 }
 
-async function callGemini(systemPrompt, userMessage) {
-  if (!GEMINI_API_KEY) return null;
+async function callGeminiWithKey(key, systemPrompt, history, userMessage) {
+  const contents = [
+    ...history.map((h) => ({ role: h.role === 'assistant' ? 'model' : 'user', parts: [{ text: h.content }] })),
+    { role: 'user', parts: [{ text: userMessage }] },
+  ];
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: `${systemPrompt}\n\nNow respond to this message: "${userMessage}"` }] }],
+        system_instruction: { parts: [{ text: systemPrompt }] },
+        contents,
         generationConfig: { temperature: 0.8, maxOutputTokens: 120 },
       }),
     }
   );
   const data = await res.json();
-  console.log('Gemini raw response:', JSON.stringify(data));
-  return data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null;
+  if (data?.error) throw new Error(`gemini: ${data.error.message || data.error.code}`);
+  const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+  if (!reply) throw new Error('gemini: empty reply');
+  return reply;
 }
 
-async function callOpenRouter(systemPrompt, userMessage) {
-  if (!OPENROUTER_API_KEY) return null;
+async function callOpenRouterWithKey(key, systemPrompt, history, userMessage) {
   const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${OPENROUTER_API_KEY}` },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
     body: JSON.stringify({
       model: 'openrouter/free',
       messages: [
         { role: 'system', content: systemPrompt },
+        ...history,
         { role: 'user', content: userMessage },
       ],
       temperature: 0.8,
@@ -330,19 +343,21 @@ async function callOpenRouter(systemPrompt, userMessage) {
     }),
   });
   const data = await res.json();
-  console.log('OpenRouter raw response:', JSON.stringify(data));
-  return data?.choices?.[0]?.message?.content?.trim() || null;
+  if (data?.error) throw new Error(`openrouter: ${data.error.message || data.error.code}`);
+  const reply = data?.choices?.[0]?.message?.content?.trim();
+  if (!reply) throw new Error('openrouter: empty reply');
+  return reply;
 }
 
-async function callTogether(systemPrompt, userMessage) {
-  if (!TOGETHER_API_KEY) return null;
+async function callTogetherWithKey(key, systemPrompt, history, userMessage) {
   const res = await fetch('https://api.together.xyz/v1/chat/completions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOGETHER_API_KEY}` },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
     body: JSON.stringify({
       model: 'meta-llama/Llama-3.3-70B-Instruct-Turbo-Free',
       messages: [
         { role: 'system', content: systemPrompt },
+        ...history,
         { role: 'user', content: userMessage },
       ],
       temperature: 0.8,
@@ -350,40 +365,66 @@ async function callTogether(systemPrompt, userMessage) {
     }),
   });
   const data = await res.json();
-  console.log('Together raw response:', JSON.stringify(data));
-  return data?.choices?.[0]?.message?.content?.trim() || null;
+  if (data?.error) throw new Error(`together: ${data.error.message || data.error.code}`);
+  const reply = data?.choices?.[0]?.message?.content?.trim();
+  if (!reply) throw new Error('together: empty reply');
+  return reply;
 }
 
-let providerIndex = 0;
+// Build one "slot" per API key across all providers — this is our full rotation pool.
+const AI_SLOTS = [
+  ...GEMINI_KEYS.map((key, i) => ({ id: `gemini-${i}`, call: (sp, h, um) => callGeminiWithKey(key, sp, h, um) })),
+  ...OPENROUTER_KEYS.map((key, i) => ({ id: `openrouter-${i}`, call: (sp, h, um) => callOpenRouterWithKey(key, sp, h, um) })),
+  ...TOGETHER_KEYS.map((key, i) => ({ id: `together-${i}`, call: (sp, h, um) => callTogetherWithKey(key, sp, h, um) })),
+];
 
-async function askGemini(userMessage, authorName, isOwner) {
-  const providers = [
-    { name: 'gemini', call: callGemini, active: !!GEMINI_API_KEY },
-    { name: 'openrouter', call: callOpenRouter, active: !!OPENROUTER_API_KEY },
-    { name: 'together', call: callTogether, active: !!TOGETHER_API_KEY },
-  ].filter((p) => p.active);
+// Slots that recently failed go on a 5-second cooldown so they're skipped until they recover.
+const slotCooldowns = new Map(); // slot.id -> timestamp when it becomes available again
+const COOLDOWN_MS = 5000;
 
-  if (providers.length === 0) {
+let slotIndex = 0;
+
+// ---- Conversation memory (per user, last few exchanges, resets if bot restarts) ----
+const conversationHistory = new Map(); // userId -> [{role, content}, ...]
+const MAX_HISTORY_TURNS = 4; // keep last 4 exchanges (8 messages) per user
+
+async function askGemini(userMessage, authorName, isOwner, userId) {
+  if (AI_SLOTS.length === 0) {
     return "AI chat isn't set up yet — ask the server owner to add an API key (GEMINI_API_KEY, OPENROUTER_API_KEY, or TOGETHER_API_KEY).";
   }
 
   const systemPrompt = buildSystemPrompt(isOwner, authorName);
+  const history = conversationHistory.get(userId) || [];
+  const now = Date.now();
 
-  // Rotate the starting provider each call, then fall through the rest on failure
-  const order = providers.map((_, i) => providers[(providerIndex + i) % providers.length]);
-  providerIndex = (providerIndex + 1) % providers.length;
+  // Rotate the starting slot each call, then fall through the rest on failure
+  const order = AI_SLOTS.map((_, i) => AI_SLOTS[(slotIndex + i) % AI_SLOTS.length]);
+  slotIndex = (slotIndex + 1) % AI_SLOTS.length;
 
-  for (const p of order) {
+  for (const slot of order) {
+    const availableAt = slotCooldowns.get(slot.id) || 0;
+    if (now < availableAt) continue; // still cooling down, skip it
+
     try {
-      const reply = await p.call(systemPrompt, userMessage);
-      if (reply) return reply;
-      console.log(`${p.name} gave no reply, trying next provider...`);
+      const reply = await slot.call(systemPrompt, history, userMessage);
+      slotCooldowns.delete(slot.id); // success — clear any old cooldown
+
+      // Save this exchange to memory, trimmed to the last MAX_HISTORY_TURNS turns
+      const updatedHistory = [
+        ...history,
+        { role: 'user', content: userMessage },
+        { role: 'assistant', content: reply },
+      ].slice(-MAX_HISTORY_TURNS * 2);
+      conversationHistory.set(userId, updatedHistory);
+
+      return reply;
     } catch (err) {
-      console.error(`${p.name} failed, trying next provider:`, err);
+      console.error(`${slot.id} failed, putting it on a ${COOLDOWN_MS / 1000}s cooldown:`, err.message);
+      slotCooldowns.set(slot.id, Date.now() + COOLDOWN_MS);
     }
   }
 
-  return "Sorry, I'm having trouble thinking right now — try again in a bit!";
+  return "All my AI keys are busy right now — give it a few seconds and try again!";
 }
 
 // Basic commands + "talk to everyone" behavior
@@ -416,7 +457,7 @@ client.on('messageCreate', async (message) => {
     await message.channel.sendTyping().catch(() => {});
     const displayName = (message.member?.displayName || message.author.username || '').toLowerCase();
     const isOwner = displayName.includes('lochabanime');
-    const aiReply = await askGemini(cleanMessage, message.author.username, isOwner);
+    const aiReply = await askGemini(cleanMessage, message.author.username, isOwner, message.author.id);
     message.reply(aiReply).catch(console.error);
     return;
   }
