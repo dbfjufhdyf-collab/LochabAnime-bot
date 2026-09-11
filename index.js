@@ -493,7 +493,9 @@ async function askGemini(userMessage, authorName, isOwner, userId) {
     }
   }
 
-  return "All my AI keys are busy right now — give it a few seconds and try again!";
+  return isOwner
+    ? "Boss, mera mood nahi hai abhi jawab dene ka 😴 thodi der baad try karna."
+    : "Are bhai mat kar, main tumhare liye nahi bana hun, ok? 😌";
 }
 
 // Basic commands + "talk to everyone" behavior
@@ -579,6 +581,7 @@ client.on('messageCreate', async (message) => {
           '`7youtuber` — guess the countryball animator, just type the name',
           '`7hangman` — start hangman, then `7letter <x>` or `7solve <word>`',
           '`7stop` — stop whatever game is currently running',
+          '`7skip` — skip the current question and get a new one',
         ].join('\n')
       );
     message.channel.send({ embeds: [embed] });
@@ -756,6 +759,16 @@ client.on('messageCreate', async (message) => {
     if (tttGames.delete(channelId)) stopped = true;
     if (numberGames.delete(channelId)) stopped = true;
     message.reply(stopped ? '🛑 Game stopped.' : 'No game is currently running here.');
+    return;
+  }
+
+  // ---------------- SKIP CURRENT QUESTION ----------------
+  if (command === 'skip') {
+    const game = wordGames.get(channelId);
+    if (!game) return message.reply('No question running here to skip.');
+    message.reply(`⏭️ Skipped! The answer was **${game.answer}**.`);
+    wordGames.delete(channelId);
+    game.next();
     return;
   }
 
