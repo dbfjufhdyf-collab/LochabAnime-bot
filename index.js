@@ -141,7 +141,13 @@ const TRIVIA_QUESTIONS = [
 ];
 
 // ---- Word scramble list ----
-const SCRAMBLE_WORDS = ['ninja', 'sensei', 'dragon', 'shadow', 'thunder', 'phoenix', 'samurai', 'kunai'];
+const SCRAMBLE_WORDS = [
+  'ninja', 'sensei', 'dragon', 'shadow', 'thunder', 'phoenix', 'samurai', 'kunai',
+  'chakra', 'katana', 'legend', 'warrior', 'village', 'forest', 'temple', 'castle',
+  'mountain', 'ocean', 'galaxy', 'rocket', 'planet', 'wizard', 'knight', 'sword',
+  'shield', 'potion', 'dungeon', 'treasure', 'island', 'volcano', 'river', 'desert',
+  'jungle', 'glacier', 'meteor', 'comet', 'nebula', 'crystal', 'diamond', 'phantom',
+];
 function scrambleWord(word) {
   const arr = word.split('');
   for (let i = arr.length - 1; i > 0; i--) {
@@ -213,6 +219,19 @@ const NARUTO_CLUES = [
   { clue: 'The Fourth Hokage, known for the Flying Thunder God technique.', a: 'minato' },
   { clue: 'A member of the Akatsuki who uses clay explosives and loves art that "is a bang".', a: 'deidara' },
   { clue: 'The leader of the Sand Village who once had a tailed beast sealed inside him.', a: 'gaara' },
+  { clue: 'A big-boned ninja from Team 10 who can massively expand his body size in battle.', a: 'choji' },
+  { clue: 'A weapons specialist who carries a giant scroll on her back and fights with puppets.', a: 'tenten' },
+  { clue: 'A lazy-sounding but brilliant strategist who eventually becomes an advisor to the Hokage.', a: 'shikamaru' },
+  { clue: 'This green-clad ninja worships hard work and his sensei Might Guy above all else.', a: 'rock lee' },
+  { clue: 'The eccentric snake-summoning sannin who defects from the Hidden Leaf.', a: 'orochimaru' },
+  { clue: 'The toad-summoning sannin known as a legendary pervert and Naruto\'s mentor.', a: 'jiraiya' },
+  { clue: 'The slug-summoning sannin who becomes the Fifth Hokage.', a: 'tsunade' },
+  { clue: 'A member of Team 8 who can communicate with insects living inside his body.', a: 'shino' },
+  { clue: 'The loud, dog-loving member of Team 8 who fights alongside his ninja hound.', a: 'kiba' },
+  { clue: 'The stoic Uchiha who massacred his own clan and became an S-rank missing-nin.', a: 'itachi' },
+  { clue: 'A blue-skinned member of the Akatsuki who wields a sword that eats chakra.', a: 'kisame' },
+  { clue: 'The Third Hokage, known as "The Professor" for knowing every jutsu in the village.', a: 'hiruzen' },
+  { clue: 'The founder of the Hidden Leaf Village and wielder of Wood Style jutsu.', a: 'hashirama' },
 ];
 
 // ---- Countryball Animator guessing (text clues, real public YouTubers) ----
@@ -248,34 +267,84 @@ function hangmanDisplay(word, guessed) {
 
 // ---- Continuous round starters for the answer-based games ----
 // Each game keeps going (auto-asks a new question) until someone uses the stop command.
+// We track which questions were recently used per channel+game so the same one
+// doesn't repeat until the whole pool has been cycled through.
+const recentlyAsked = new Map(); // key: `${channelId}-${type}` -> Set of used answers
+
+function pickFresh(channelId, type, pool, getAnswer) {
+  const key = `${channelId}-${type}`;
+  let used = recentlyAsked.get(key);
+  if (!used) {
+    used = new Set();
+    recentlyAsked.set(key, used);
+  }
+  // Only reset once every single item in the pool has been used
+  if (used.size >= pool.length) used.clear();
+
+  let pick;
+  let attempts = 0;
+  do {
+    pick = pool[Math.floor(Math.random() * pool.length)];
+    attempts++;
+  } while (used.has(getAnswer(pick)) && attempts < pool.length * 3);
+
+  used.add(getAnswer(pick));
+  return pick;
+}
+
 function startFlagRound(channel) {
-  const pick = FLAGS[Math.floor(Math.random() * FLAGS.length)];
+  const pick = pickFresh(channel.id, 'flag', FLAGS, (p) => p.name);
   wordGames.set(channel.id, { type: 'flag', answer: pick.name, next: () => startFlagRound(channel) });
   channel.send(`🏳️ Which country's flag is this? ${pick.emoji}`);
 }
 
 function startNarutoRound(channel) {
-  const pick = NARUTO_CLUES[Math.floor(Math.random() * NARUTO_CLUES.length)];
+  const pick = pickFresh(channel.id, 'naruto', NARUTO_CLUES, (p) => p.a);
   wordGames.set(channel.id, { type: 'naruto', answer: pick.a, next: () => startNarutoRound(channel) });
   channel.send(`🍥 **Guess the character:** ${pick.clue}`);
 }
 
 function startYoutuberRound(channel) {
-  const pick = YOUTUBER_CLUES[Math.floor(Math.random() * YOUTUBER_CLUES.length)];
+  const pick = pickFresh(channel.id, 'youtuber', YOUTUBER_CLUES, (p) => p.a);
   wordGames.set(channel.id, { type: 'youtuber', answer: pick.a, next: () => startYoutuberRound(channel) });
   channel.send(`📺 **Guess the countryball animator:** ${pick.clue}`);
 }
 
-function startTriviaRound(channel) {
-  const pick = TRIVIA_QUESTIONS[Math.floor(Math.random() * TRIVIA_QUESTIONS.length)];
-  wordGames.set(channel.id, { type: 'trivia', answer: pick.a, next: () => startTriviaRound(channel) });
-  channel.send(`🧠 **Trivia:** ${pick.q}`);
+const askedTriviaQuestions = new Map(); // channelId -> Set of question texts already asked
+
+function startTriviaRound(channel, attempt = 0) {
+  if (!askedTriviaQuestions.has(channel.id)) askedTriviaQuestions.set(channel.id, new Set());
+  const asked = askedTriviaQuestions.get(channel.id);
+
+  fetch('https://opentdb.com/api.php?amount=1&type=multiple&encode=url3986')
+    .then((res) => res.json())
+    .then((data) => {
+      const item = data?.results?.[0];
+      if (!item) throw new Error('no trivia question returned');
+      const question = decodeURIComponent(item.question);
+      const answer = decodeURIComponent(item.correct_answer).toLowerCase();
+
+      // If we've already asked this exact question in this channel, fetch a different one
+      if (asked.has(question) && attempt < 5) {
+        return startTriviaRound(channel, attempt + 1);
+      }
+      asked.add(question);
+
+      wordGames.set(channel.id, { type: 'trivia', answer, next: () => startTriviaRound(channel) });
+      channel.send(`🧠 **Trivia:** ${question}`);
+    })
+    .catch((err) => {
+      console.error('OpenTDB fetch failed, falling back to local questions:', err);
+      const pick = pickFresh(channel.id, 'trivia', TRIVIA_QUESTIONS, (p) => p.a);
+      wordGames.set(channel.id, { type: 'trivia', answer: pick.a, next: () => startTriviaRound(channel) });
+      channel.send(`🧠 **Trivia:** ${pick.q}`);
+    });
 }
 
 function startScrambleRound(channel) {
-  const word = SCRAMBLE_WORDS[Math.floor(Math.random() * SCRAMBLE_WORDS.length)];
-  const scrambled = scrambleWord(word);
-  wordGames.set(channel.id, { type: 'scramble', answer: word, next: () => startScrambleRound(channel) });
+  const wordPick = pickFresh(channel.id, 'scramble', SCRAMBLE_WORDS, (w) => w);
+  const scrambled = scrambleWord(wordPick);
+  wordGames.set(channel.id, { type: 'scramble', answer: wordPick, next: () => startScrambleRound(channel) });
   channel.send(`🔤 Unscramble this word: **${scrambled.toUpperCase()}**`);
 }
 
